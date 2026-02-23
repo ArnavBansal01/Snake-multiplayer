@@ -68,6 +68,14 @@ interface Particle extends Point {
   color: string;
   size: number;
 }
+const SNAKE_COLORS = [
+  { head: "#4ade80", body: "#22c55e", glow: "#4ade8040" }, // Neon Green
+  { head: "#06b6d4", body: "#0891b2", glow: "#06b6d440" }, // Cyan
+  { head: "#f43f5e", body: "#e11d48", glow: "#f43f5e40" }, // Rose
+  { head: "#a855f7", body: "#9333ea", glow: "#a855f740" }, // Purple
+  { head: "#facc15", body: "#eab308", glow: "#facc1540" }, // Yellow
+  { head: "#ff8a00", body: "#ea580c", glow: "#ff8a0040" }, // Orange
+];
 
 interface SnakeEntity {
   head: Point;
@@ -78,7 +86,7 @@ interface SnakeEntity {
   speed: number;
   dead: boolean;
   respawnTime: number;
-  color: string;
+  theme: { head: string; body: string; glow: string }; // Replaced 'color' with 'theme'
   isBot: boolean;
   decisionTimer?: number;
   isBoosting?: boolean;
@@ -133,7 +141,7 @@ export default function App() {
       speed: 200,
       dead: false,
       respawnTime: 0,
-      color: "#4ade80",
+      theme: { head: "#4ade80", body: "#22c55e", glow: "#4ade8040" },
       isBot: false,
       isBoosting: false,
     } as SnakeEntity,
@@ -254,7 +262,8 @@ export default function App() {
     for (let i = 0; i < 200; i++) {
       initialHistory.push({ x: x - i * RECORD_DIST, y: y });
     }
-
+    const randomTheme =
+      SNAKE_COLORS[Math.floor(Math.random() * SNAKE_COLORS.length)];
     // NO MORE WEIRD MATH. Just use the direct speed!
     return {
       head: { x, y },
@@ -265,7 +274,9 @@ export default function App() {
       speed: config.baseSpeed,
       dead: false,
       respawnTime: 0,
-      color: isBot ? "#3b82f6" : "#4ade80",
+      theme: isBot
+        ? { head: "#60a5fa", body: "#3b82f6", glow: "#3b82f640" }
+        : randomTheme,
       isBot,
       decisionTimer: 0,
       isBoosting: false,
@@ -326,7 +337,12 @@ export default function App() {
 
       // Shatter Effect
       const particleCount = snake.length * 5;
-      createParticles(snake.head.x, snake.head.y, snake.color, particleCount);
+      createParticles(
+        snake.head.x,
+        snake.head.y,
+        snake.theme.head,
+        particleCount,
+      );
 
       // Drop Super Food
       for (let i = 0; i < particleCount; i++) {
@@ -352,7 +368,7 @@ export default function App() {
           socket.emit("player_death", {
             x: snake.head.x,
             y: snake.head.y,
-            color: snake.color,
+            color: snake.theme.head, // <--- FIXED
             particleCount,
             message: `[SYSTEM]: ${playerName} was terminated by ${reason}`,
           });
@@ -375,17 +391,23 @@ export default function App() {
     (time: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext("2d", { alpha: false });
       if (!ctx) return;
 
+      const W = canvas.width;
+      const H = canvas.height;
       const g = game.current;
       const dt = Math.min((time - g.lastTime) / 1000, 0.1);
       g.lastTime = time;
 
       // Remove old kill feed items
-      setKillFeed((prev) =>
-        prev.filter((item) => Date.now() - item.time < 3000),
-      );
+     // Remove old kill feed items
+      setKillFeed((prev) => {
+        const now = Date.now();
+        const filtered = prev.filter((item) => now - item.time < 3000);
+        // Only trigger a React render if an item was actually removed!
+        return filtered.length === prev.length ? prev : filtered; 
+      });
 
       if (gameState === "PLAYING") {
         const snakes = isMultiplayer ? [g.player] : [g.player, ...g.bots];
@@ -522,14 +544,16 @@ export default function App() {
           });
         });
 
-        // Update Particles
+        // Update Particles — swap-remove instead of splice for O(1)
         for (let i = g.particles.length - 1; i >= 0; i--) {
           const p = g.particles[i];
           p.x += p.vx * dt;
           p.y += p.vy * dt;
           p.life -= dt;
           if (p.life <= 0) {
-            g.particles.splice(i, 1);
+            // Swap with last element and pop — O(1) instead of O(n) splice
+            g.particles[i] = g.particles[g.particles.length - 1];
+            g.particles.pop();
           }
         }
 
@@ -544,13 +568,21 @@ export default function App() {
 
       // --- Rendering ---
       ctx.fillStyle = "#050505";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, W, H);
 
       ctx.save();
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
+      const cx = W / 2;
+      const cy = H / 2;
+      const camX = cx - g.player.head.x;
+      const camY = cy - g.player.head.y;
 
-      ctx.translate(cx - g.player.head.x, cy - g.player.head.y);
+      // Viewport bounds for culling (world coords)
+      const vpLeft = g.player.head.x - cx - 50;
+      const vpRight = g.player.head.x + cx + 50;
+      const vpTop = g.player.head.y - cy - 50;
+      const vpBottom = g.player.head.y + cy + 50;
+
+      ctx.translate(camX, camY);
 
       // Grid
       ctx.strokeStyle = "#112233";
@@ -561,8 +593,8 @@ export default function App() {
         Math.floor((g.player.head.x - cx) / gridSpacing) * gridSpacing;
       const startY =
         Math.floor((g.player.head.y - cy) / gridSpacing) * gridSpacing;
-      const endX = startX + canvas.width + gridSpacing * 2;
-      const endY = startY + canvas.height + gridSpacing * 2;
+      const endX = startX + W + gridSpacing * 2;
+      const endY = startY + H + gridSpacing * 2;
 
       for (
         let x = Math.max(0, startX);
@@ -590,8 +622,10 @@ export default function App() {
       ctx.lineWidth = 30;
       ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
 
-      // Foods
-      g.foods.forEach((f) => {
+      // Foods — viewport culled
+      for (let i = 0; i < g.foods.length; i++) {
+        const f = g.foods[i];
+        if (f.x < vpLeft || f.x > vpRight || f.y < vpTop || f.y > vpBottom) continue;
         ctx.fillStyle = f.color;
         ctx.beginPath();
         ctx.arc(f.x, f.y, f.size, 0, Math.PI * 2);
@@ -600,18 +634,19 @@ export default function App() {
         ctx.beginPath();
         ctx.arc(f.x, f.y, f.size * 2.5, 0, Math.PI * 2);
         ctx.fill();
-      });
+      }
 
-      // Particles
-      g.particles.forEach((p) => {
+      // Particles — viewport culled
+      for (let i = 0; i < g.particles.length; i++) {
+        const p = g.particles[i];
+        if (p.x < vpLeft || p.x > vpRight || p.y < vpTop || p.y > vpBottom) continue;
         ctx.fillStyle = p.color;
         ctx.globalAlpha = p.life / p.maxLife;
-        ctx.beginPath();
         ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
-        ctx.fill();
         ctx.globalAlpha = 1;
-      });
+      }
 
+      // Snakes
       // Snakes
       const allSnakes = isMultiplayer ? [g.player] : [...g.bots, g.player];
 
@@ -632,9 +667,10 @@ export default function App() {
       allSnakes.forEach((snake) => {
         if (snake.dead) return;
 
-        const bodyColor = snake.isBot ? "#3b82f6" : "#a855f7";
-        const headColor = snake.isBot ? "#60a5fa" : "#4ade80";
-        const glowColor = snake.isBot ? "#3b82f640" : "#a855f730";
+        // Dynamically pull the color from the snake's theme!
+        const bodyColor = snake.theme?.body || "#a855f7";
+        const headColor = snake.theme?.head || "#4ade80";
+        const glowColor = snake.theme?.glow || "#a855f730";
 
         // Boost Trail
         if (snake.isBoosting) {
@@ -653,11 +689,12 @@ export default function App() {
           ctx.restore();
         }
 
-        // Body
+        // Body — viewport culled
         for (let i = snake.length - 1; i >= 1; i--) {
           const idx = i * SEGMENT_SPACING_IDX;
           if (idx < snake.history.length) {
             const pos = snake.history[idx];
+            if (pos.x < vpLeft || pos.x > vpRight || pos.y < vpTop || pos.y > vpBottom) continue;
             const isNearTail = i > snake.length - 3;
             const size = isNearTail ? 10 : 14;
 
@@ -727,6 +764,21 @@ export default function App() {
       });
 
       ctx.restore();
+
+      // Cinematic CRT Vignette Overlay
+      const gradient = ctx.createRadialGradient(
+        W / 2,
+        H / 2,
+        H / 3,
+        W / 2,
+        H / 2,
+        W,
+      );
+      gradient.addColorStop(0, "transparent");
+      gradient.addColorStop(1, "rgba(0,0,0,0.8)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, W, H);
+      // ----------------------------------------------
 
       requestRef.current = requestAnimationFrame(updateAndDraw);
     },
@@ -1168,10 +1220,19 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => setGameState("MENU")}
+            onClick={() => {
+              if (isMultiplayer) {
+                // Instantly respawn in the same room!
+                initGame(difficulty);
+              } else {
+                // Single player kicks back to menu
+                setGameState("MENU");
+              }
+            }}
             className="px-8 py-4 bg-red-500/20 border border-red-400 text-red-300 rounded-xl hover:bg-red-500/40 hover:text-white transition-all flex items-center gap-3 uppercase tracking-widest font-bold shadow-[0_0_20px_rgba(239,68,68,0.4)] cursor-pointer"
           >
-            <RotateCcw className="w-5 h-5" /> Reboot System
+            <RotateCcw className="w-5 h-5" />
+            {isMultiplayer ? "Respawn" : "Reboot System"}
           </button>
         </div>
       )}
