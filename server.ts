@@ -2,18 +2,34 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import os from "os";
 
 const rooms: Record<string, Record<string, any>> = {};
 
+function getLocalIPs(): string[] {
+  const interfaces = os.networkInterfaces();
+  const ips: string[] = [];
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        ips.push(iface.address);
+      }
+    }
+  }
+  return ips;
+}
+
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
   const httpServer = createServer(app);
   
   const io = new Server(httpServer, {
     cors: {
       origin: "*",
-    }
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
   io.on("connection", (socket) => {
@@ -90,7 +106,15 @@ async function startServer() {
   }
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`\n🐍 ══════════════════════════════════════════`);
+    console.log(`   NEON.IO — Cyberpunk Snake Multiplayer`);
+    console.log(`   ══════════════════════════════════════════`);
+    console.log(`   Local:   http://localhost:${PORT}`);
+    const ips = getLocalIPs();
+    ips.forEach(ip => {
+      console.log(`   Network: http://${ip}:${PORT}`);
+    });
+    console.log(`   ══════════════════════════════════════════\n`);
   });
 }
 

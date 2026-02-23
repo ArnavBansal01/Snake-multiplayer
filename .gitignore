@@ -1,8 +1,40 @@
+# Dependencies
 node_modules/
+
+# Build output
 build/
 dist/
-coverage/
-.DS_Store
-*.log
-.env*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
 !.env.example
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Vercel
+.vercel/
+
+# Coverage
+coverage/
+
+# Misc
+*.map

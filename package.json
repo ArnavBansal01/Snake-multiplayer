@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "neon-io-snake",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "start": "node server.ts"
+    "start": "NODE_ENV=production node --loader tsx server.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
