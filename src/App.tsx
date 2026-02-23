@@ -90,6 +90,7 @@ interface SnakeEntity {
   isBot: boolean;
   decisionTimer?: number;
   isBoosting?: boolean;
+  score: number;
 }
 
 interface KillFeedItem {
@@ -284,6 +285,7 @@ export default function App() {
       isBot,
       decisionTimer: 0,
       isBoosting: false,
+      score: 0,
     };
   };
 
@@ -429,34 +431,75 @@ export default function App() {
           // Speed Boost Logic
           const currentSpeed = snake.isBoosting ? snake.speed * 2 : snake.speed;
 
-          // AI Logic
+         // --- SMARTER AI LOGIC ---
           if (snake.isBot) {
+            // Bots now "think" much faster (every 100-300ms instead of 200-700ms)
             snake.decisionTimer = (snake.decisionTimer || 0) - dt;
+            
             if (snake.decisionTimer <= 0) {
-              snake.decisionTimer = Math.random() * 0.5 + 0.2;
+              snake.decisionTimer = Math.random() * 0.2 + 0.1; 
 
-              if (Math.random() < 0.7 && g.foods.length > 0) {
-                let nearest = g.foods[0];
-                let minDst = Infinity;
-                for (const f of g.foods) {
-                  const dst = Math.hypot(
-                    snake.head.x - f.x,
-                    snake.head.y - f.y,
-                  );
-                  if (dst < minDst) {
-                    minDst = dst;
-                    nearest = f;
+              // 1. DANGER SENSOR (Project a point in front of the bot)
+              // The faster they go, the further ahead they look
+              const lookDist = 80 + snake.speed * 0.1; 
+              const aheadX = snake.head.x + Math.cos(snake.angle) * lookDist;
+              const aheadY = snake.head.y + Math.sin(snake.angle) * lookDist;
+              
+              let danger = false;
+
+              // Check if the point hits the world borders
+              if (aheadX < 50 || aheadX > WORLD_SIZE - 50 || aheadY < 50 || aheadY > WORLD_SIZE - 50) {
+                danger = true;
+              }
+
+              // Check if the point hits another snake's body
+              if (!danger) {
+                for (const other of snakes) {
+                  if (other === snake || other.dead) continue;
+                  
+                  // Optimization: i += 2 skips every other segment so we don't lag the browser!
+                  for (let i = 0; i < other.length; i += 2) { 
+                    const idx = i * SEGMENT_SPACING_IDX;
+                    if (idx < other.history.length) {
+                      const seg = other.history[idx];
+                      if (Math.hypot(aheadX - seg.x, aheadY - seg.y) < 50) {
+                        danger = true;
+                        break;
+                      }
+                    }
                   }
+                  if (danger) break;
                 }
-                snake.targetAngle = Math.atan2(
-                  nearest.y - snake.head.y,
-                  nearest.x - snake.head.x,
-                );
+              }
+
+              // 2. MAKE A DECISION
+              if (danger) {
+                // PANIC MODE: Hard turn (~90 degrees) left or right
+                snake.targetAngle += (Math.random() > 0.5 ? 1.5 : -1.5); 
+                snake.isBoosting = true;   // Hit the gas to escape!
+                snake.decisionTimer = 0.4; // Hold this escape maneuver a bit longer
               } else {
-                snake.targetAngle = Math.random() * Math.PI * 2;
+                snake.isBoosting = false; // Relax and turn off boost
+                
+                // Normal food seeking (80% chance to track food, 20% chance to wander)
+                if (Math.random() < 0.8 && g.foods.length > 0) {
+                  let nearest = g.foods[0];
+                  let minDst = Infinity;
+                  for (const f of g.foods) {
+                    const dst = Math.hypot(snake.head.x - f.x, snake.head.y - f.y);
+                    if (dst < minDst) {
+                      minDst = dst;
+                      nearest = f;
+                    }
+                  }
+                  snake.targetAngle = Math.atan2(nearest.y - snake.head.y, nearest.x - snake.head.x);
+                } else {
+                  snake.targetAngle += (Math.random() - 0.5); // Slight wander
+                }
               }
             }
           }
+          // ------------------------
 
           // Movement
           let diff = snake.targetAngle - snake.angle;
@@ -491,6 +534,7 @@ export default function App() {
           }
 
           // Food Collision
+          // Food Collision
           let scoreGained = 0;
           for (let i = g.foods.length - 1; i >= 0; i--) {
             const f = g.foods[i];
@@ -500,13 +544,17 @@ export default function App() {
             ) {
               g.foods.splice(i, 1);
               scoreGained += f.value;
-              snake.length += 1;
 
-              // Reverse speed logic: decrease delay, increase speed
-              // We store the current delay in a custom property or just calculate it from speed
-              const currentDelay = 10000 / snake.speed;
-              const newDelay = Math.max(10, currentDelay - g.config.speedInc);
-              snake.speed += g.config.speedInc;
+              // --- NEW SLOW GROWTH LOGIC ---
+              snake.score += f.value;
+              // Normal food = 10 score. Dividing by 40 means it takes 4 foods to grow 1 segment!
+              snake.length = 10 + Math.floor(snake.score / 40);
+              
+              // We also need to scale down the speed acceleration by 4x, 
+              // otherwise the snake gets uncontrollably fast while still tiny.
+              snake.speed += (g.config.speedInc * 0.25);
+              // -----------------------------
+              
               spawnFood(1);
             }
           }
