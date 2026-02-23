@@ -828,28 +828,36 @@ export default function App() {
      // Update local player reference from server state
       if (state.players && state.players[socket.id]) {
         const serverPlayer = state.players[socket.id].snake;
-        if (serverPlayer) {
+       if (serverPlayer) {
           // Trust the server for stats and progression
           game.current.player.length = serverPlayer.length;
           game.current.player.speed = serverPlayer.speed;
           game.current.player.dead = serverPlayer.dead;
           
-        // Anti-Desync Protocol: 
+          // 1. THE FIX: Always trust the server's body history to prevent "clumping" blobs
+          game.current.player.history = serverPlayer.history;
+          
+          // Anti-Desync Protocol: 
           const dist = Math.hypot(
             game.current.player.head.x - serverPlayer.head.x, 
             game.current.player.head.y - serverPlayer.head.y
           );
           
-          // Only hard-teleport if the desync is massive (like a severe lag spike)
+          // Only hard-teleport if the desync is massive
           if (dist > 250) { 
             game.current.player.head = { ...serverPlayer.head };
             game.current.player.angle = serverPlayer.angle;
-            game.current.player.history = [...serverPlayer.history];
           } 
-          // Soft-correction (Lerp) - smoothly pulls the snake toward the server's true position
+          // Soft-correction (Lerp)
           else if (dist > 10) {
-            game.current.player.head.x += (serverPlayer.head.x - game.current.player.head.x) * 0.15;
-            game.current.player.head.y += (serverPlayer.head.y - game.current.player.head.y) * 0.15;
+            game.current.player.head.x += (serverPlayer.head.x - game.current.player.head.x) * 0.3;
+            game.current.player.head.y += (serverPlayer.head.y - game.current.player.head.y) * 0.3;
+            
+            // 2. THE FIX: Also gently correct the angle so your snake's eyes don't jitter
+            let angleDiff = serverPlayer.angle - game.current.player.angle;
+            // Normalize the angle so it doesn't spin wildly
+            angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff)); 
+            game.current.player.angle += angleDiff * 0.3;
           }
         }
       }
