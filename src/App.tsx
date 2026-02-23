@@ -509,14 +509,13 @@ export default function App() {
           snake.head.x += Math.cos(snake.angle) * currentSpeed * dt;
           snake.head.y += Math.sin(snake.angle) * currentSpeed * dt;
 
-          // World Bounds Check
+         // World Bounds Check
           if (
-            snake.head.x < 0 ||
-            snake.head.x > WORLD_SIZE ||
-            snake.head.y < 0 ||
-            snake.head.y > WORLD_SIZE
+            snake.head.x < 0 || snake.head.x > WORLD_SIZE ||
+            snake.head.y < 0 || snake.head.y > WORLD_SIZE
           ) {
-            handleSnakeDeath(snake, "World Border");
+            // Only kill locally if in single-player. Server handles multiplayer borders!
+            if (!isMultiplayer) handleSnakeDeath(snake, "World Border");
           }
 
           // History
@@ -534,64 +533,45 @@ export default function App() {
           }
 
           // Food Collision
-          // Food Collision
           let scoreGained = 0;
           for (let i = g.foods.length - 1; i >= 0; i--) {
             const f = g.foods[i];
-            if (
-              Math.hypot(snake.head.x - f.x, snake.head.y - f.y) <
-              20 + f.size
-            ) {
-              g.foods.splice(i, 1);
-              scoreGained += f.value;
+            if (Math.hypot(snake.head.x - f.x, snake.head.y - f.y) < 20 + f.size) {
+              g.foods.splice(i, 1); // Visually eat it instantly
 
-              // --- NEW SLOW GROWTH LOGIC ---
-              snake.score += f.value;
-              // Normal food = 10 score. Dividing by 40 means it takes 4 foods to grow 1 segment!
-              snake.length = 10 + Math.floor(snake.score / 40);
-              
-              // We also need to scale down the speed acceleration by 4x, 
-              // otherwise the snake gets uncontrollably fast while still tiny.
-              snake.speed += (g.config.speedInc * 0.25);
-              // -----------------------------
-              
-              spawnFood(1);
+              // Only update physical stats locally if offline. Server handles this in multiplayer!
+              if (!isMultiplayer) {
+                scoreGained += f.value;
+                snake.score += f.value;
+                snake.length = 10 + Math.floor(snake.score / 40);
+                snake.speed += (g.config.speedInc * 0.25);
+                spawnFood(1);
+              }
             }
           }
-          if (!snake.isBot && scoreGained > 0) {
+          if (!isMultiplayer && !snake.isBot && scoreGained > 0) {
             setScore((s) => s + scoreGained);
           }
 
-          // Snake Collision
-          const collisionTargets = isMultiplayer
-            ? [
-                g.player,
-                ...Object.keys(g.networkPlayers)
-                  .filter((id) => id !== socket.id)
-                  .map((id) => g.networkPlayers[id]?.snake)
-                  .filter(Boolean),
-              ]
-            : [g.player, ...g.bots];
+          // Snake Collision (Single Player Only)
+          // In multiplayer, the server has 100% authority over deaths.
+          if (!isMultiplayer) {
+            const collisionTargets = [g.player, ...g.bots];
+            collisionTargets.forEach((otherSnake) => {
+              if (otherSnake.dead || snake === otherSnake) return;
 
-          collisionTargets.forEach((otherSnake) => {
-            if (otherSnake.dead || snake === otherSnake) return;
-
-            for (let i = 0; i < otherSnake.length; i++) {
-              const idx = i * SEGMENT_SPACING_IDX;
-              if (idx < otherSnake.history.length) {
-                const seg = otherSnake.history[idx];
-                if (
-                  Math.hypot(snake.head.x - seg.x, snake.head.y - seg.y) < 18
-                ) {
-                  handleSnakeDeath(
-                    snake,
-                    otherSnake.isBot ? "Enemy Bot" : "Network Player",
-                  );
-                  break;
+              for (let i = 0; i < otherSnake.length; i++) {
+                const idx = i * SEGMENT_SPACING_IDX;
+                if (idx < otherSnake.history.length) {
+                  const seg = otherSnake.history[idx];
+                  if (Math.hypot(snake.head.x - seg.x, snake.head.y - seg.y) < 18) {
+                    handleSnakeDeath(snake, "Enemy Bot");
+                    break;
+                  }
                 }
               }
-            }
-          });
+            });
+          }
         });
 
         // Update Particles — swap-remove instead of splice for O(1)
@@ -854,17 +834,22 @@ export default function App() {
           game.current.player.speed = serverPlayer.speed;
           game.current.player.dead = serverPlayer.dead;
           
-          // Anti-Desync Protocol: 
-          // Only force an overwrite if the client prediction drifts dangerously far from reality
+        // Anti-Desync Protocol: 
           const dist = Math.hypot(
             game.current.player.head.x - serverPlayer.head.x, 
             game.current.player.head.y - serverPlayer.head.y
           );
           
-          if (dist > 80) { 
-            game.current.player.head = serverPlayer.head;
+          // Only hard-teleport if the desync is massive (like a severe lag spike)
+          if (dist > 250) { 
+            game.current.player.head = { ...serverPlayer.head };
             game.current.player.angle = serverPlayer.angle;
-            game.current.player.history = serverPlayer.history;
+            game.current.player.history = [...serverPlayer.history];
+          } 
+          // Soft-correction (Lerp) - smoothly pulls the snake toward the server's true position
+          else if (dist > 10) {
+            game.current.player.head.x += (serverPlayer.head.x - game.current.player.head.x) * 0.15;
+            game.current.player.head.y += (serverPlayer.head.y - game.current.player.head.y) * 0.15;
           }
         }
       }
