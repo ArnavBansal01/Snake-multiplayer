@@ -7,12 +7,12 @@
   // --- Shared Constants (must match client) ---
   const WORLD_SIZE = 3000;
   const FOOD_COUNT = 150;
-  const RECORD_DIST = 4;
+  const RECORD_DIST = 6;
   const SEGMENT_SPACING_IDX = 6;
   const BASE_SPEED = 300; // HARD difficulty for multiplayer
   const TURN_SPEED = 5.5;
   const SPEED_INC = 0.8;
-  const TICK_RATE = 20; // ticks per second
+  const TICK_RATE = 30; // ticks per second
   const TICK_MS = 1000 / TICK_RATE;
 
   const FOOD_COLORS = ["#facc15", "#06b6d4", "#f43f5e", "#3b82f6", "#a855f7", "#4ade80"];
