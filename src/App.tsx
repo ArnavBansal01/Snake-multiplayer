@@ -413,8 +413,8 @@ export default function App() {
       });
 
       if (gameState === "PLAYING") {
-        // In multiplayer, movement is server-driven. Only run local physics for single-player.
-        const snakes = isMultiplayer ? [] : [g.player, ...g.bots];
+       // Run local physics for the player even in multiplayer (Client-Side Prediction)
+        const snakes = isMultiplayer ? [g.player] : [g.player, ...g.bots];
 
         snakes.forEach((snake) => {
           if (snake.dead) {
@@ -697,20 +697,20 @@ export default function App() {
         ctx.globalAlpha = 1;
       }
 
-      // Snakes — in multiplayer, render all from server state
-      const allSnakes: any[] = isMultiplayer ? [] : [...g.bots, g.player];
+      // Always draw our immediate local player for zero latency
+      const allSnakes: any[] = isMultiplayer ? [g.player] : [...g.bots, g.player];
 
       if (isMultiplayer) {
-        // In multiplayer, foods come from server — render them above
-        // (already handled — g.foods is synced from server)
-
         for (const socketId in g.networkPlayers) {
+          // SKIP drawing the server's delayed copy of our own snake!
+          if (socketId === socket.id) continue; 
+          
           const networkData = g.networkPlayers[socketId];
           if (networkData && networkData.snake && !networkData.snake.dead) {
             allSnakes.push({
               ...networkData.snake,
               playerName: networkData.playerName,
-              _isLocalPlayer: socketId === socket.id,
+              _isLocalPlayer: false,
             });
           }
         }
@@ -845,16 +845,27 @@ export default function App() {
       if (state.foods) {
         game.current.foods = state.foods;
       }
-      // Update local player reference from server state
+     // Update local player reference from server state
       if (state.players && state.players[socket.id]) {
         const serverPlayer = state.players[socket.id].snake;
         if (serverPlayer) {
-          game.current.player.head = serverPlayer.head;
-          game.current.player.angle = serverPlayer.angle;
-          game.current.player.history = serverPlayer.history;
+          // Trust the server for stats and progression
           game.current.player.length = serverPlayer.length;
           game.current.player.speed = serverPlayer.speed;
           game.current.player.dead = serverPlayer.dead;
+          
+          // Anti-Desync Protocol: 
+          // Only force an overwrite if the client prediction drifts dangerously far from reality
+          const dist = Math.hypot(
+            game.current.player.head.x - serverPlayer.head.x, 
+            game.current.player.head.y - serverPlayer.head.y
+          );
+          
+          if (dist > 80) { 
+            game.current.player.head = serverPlayer.head;
+            game.current.player.angle = serverPlayer.angle;
+            game.current.player.history = serverPlayer.history;
+          }
         }
       }
     };
