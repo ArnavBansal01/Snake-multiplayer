@@ -587,8 +587,8 @@ export default function App() {
           }
         }
 
-        // In multiplayer, send input only (server does physics)
-        if (isMultiplayer && time - g.lastNetworkUpdate > 50) {
+        // In multiplayer, send input faster (server does physics)
+        if (isMultiplayer && time - g.lastNetworkUpdate > 30) {
           g.lastNetworkUpdate = time;
           socket.emit("player_input", {
             targetAngle: g.player.targetAngle,
@@ -850,14 +850,14 @@ export default function App() {
           } 
           // Soft-correction (Lerp)
           else if (dist > 10) {
-            game.current.player.head.x += (serverPlayer.head.x - game.current.player.head.x) * 0.3;
-            game.current.player.head.y += (serverPlayer.head.y - game.current.player.head.y) * 0.3;
+            game.current.player.head.x += (serverPlayer.head.x - game.current.player.head.x) * 0.15;
+            game.current.player.head.y += (serverPlayer.head.y - game.current.player.head.y) * 0.15;
             
-            // 2. THE FIX: Also gently correct the angle so your snake's eyes don't jitter
-            let angleDiff = serverPlayer.angle - game.current.player.angle;
-            // Normalize the angle so it doesn't spin wildly
-            angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff)); 
-            game.current.player.angle += angleDiff * 0.3;
+            // 2. THE FIX UPDATE: Do not forcibly correct the angle during turns, so it doesn't fight player input (drift).
+            // Visual rotation now purely relies on local prediction, making it perfectly responsive.
+            // let angleDiff = serverPlayer.angle - game.current.player.angle;
+            // angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff)); 
+            // game.current.player.angle += angleDiff * 0.3;
           }
         }
       }
