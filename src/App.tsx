@@ -122,10 +122,11 @@ export default function App() {
 
   // Chat State
   const [chatMessages, setChatMessages] = useState<
-    { id: number; sender: string; text: string }[]
+    { id: number; sender: string; text: string; isSystem?: boolean }[]
   >([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatFocused, setIsChatFocused] = useState(false);
+  const chatBoxRef = useRef<HTMLDivElement>(null);
 
   // Refs for Game Engine
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -196,11 +197,14 @@ export default function App() {
     url.searchParams.set("room", code);
     window.history.pushState({}, "", url);
 
-    socket.emit("join_room", code);
+    // Pick a random theme for this player
+    const theme = SNAKE_COLORS[Math.floor(Math.random() * SNAKE_COLORS.length)];
+    game.current.player.theme = theme;
+
+    // Send join with player data — server creates the snake
+    socket.emit("join_room", { roomCode: code, playerName: playerName.trim(), theme });
 
     setIsMultiplayer(true);
-    // For multiplayer, we might default to a specific difficulty or sync it
-    // For now, let's default to MEDIUM for fairness
     setDifficulty("HARD");
     initGame("HARD");
   };
@@ -331,32 +335,40 @@ export default function App() {
     });
   }, [highScore]);
 
+  // Client-side shatter effect trigger (used for both single-player and multiplayer death visuals)
+  const triggerShatter = useCallback(
+    (x: number, y: number, color: string, count: number, bodyPositions?: Point[]) => {
+      // Multi-point shatter along body if positions available
+      if (bodyPositions && bodyPositions.length > 0) {
+        const perPoint = Math.max(3, Math.floor(count / bodyPositions.length));
+        for (const pos of bodyPositions) {
+          createParticles(pos.x, pos.y, color, perPoint);
+        }
+      } else {
+        createParticles(x, y, color, count);
+      }
+    },
+    [createParticles],
+  );
+
   const handleSnakeDeath = useCallback(
     (snake: SnakeEntity, reason: string) => {
       snake.dead = true;
 
-      // Shatter Effect
-      const particleCount = snake.length * 5;
-      createParticles(
-        snake.head.x,
-        snake.head.y,
-        snake.theme.head,
-        particleCount,
-      );
-
-      // Drop Super Food
-      for (let i = 0; i < particleCount; i++) {
-        if (i % 10 === 0) {
-          // Drop super food near death location with some scatter
-          const angle = Math.random() * Math.PI * 2;
-          const dist = Math.random() * 50;
-          spawnFood(
-            1,
-            snake.head.x + Math.cos(angle) * dist,
-            snake.head.y + Math.sin(angle) * dist,
-            true,
-          );
+      // Shatter Effect along body trail (single-player only — multiplayer uses server events)
+      const bodyPositions: Point[] = [];
+      for (let i = 0; i < snake.length; i++) {
+        const idx = i * SEGMENT_SPACING_IDX;
+        if (idx < snake.history.length) {
+          bodyPositions.push(snake.history[idx]);
         }
+      }
+      const particleCount = snake.length * 5;
+      triggerShatter(snake.head.x, snake.head.y, snake.theme.head, particleCount, bodyPositions);
+
+      // Drop Super Food along the body trail (single-player only — multiplayer handles on server)
+      for (const pos of bodyPositions) {
+        spawnFood(1, pos.x, pos.y, true);
       }
 
       if (snake.isBot) {
@@ -364,15 +376,6 @@ export default function App() {
         addKillFeed(`Enemy player terminated by ${reason}`);
       } else {
         addKillFeed(`Player terminated by ${reason}`);
-        if (isMultiplayer) {
-          socket.emit("player_death", {
-            x: snake.head.x,
-            y: snake.head.y,
-            color: snake.theme.head, // <--- FIXED
-            particleCount,
-            message: `[SYSTEM]: ${playerName} was terminated by ${reason}`,
-          });
-        }
         gameOver();
       }
     },
@@ -380,9 +383,7 @@ export default function App() {
       spawnFood,
       addKillFeed,
       gameOver,
-      createParticles,
-      isMultiplayer,
-      playerName,
+      triggerShatter,
     ],
   );
 
@@ -410,7 +411,8 @@ export default function App() {
       });
 
       if (gameState === "PLAYING") {
-        const snakes = isMultiplayer ? [g.player] : [g.player, ...g.bots];
+        // In multiplayer, movement is server-driven. Only run local physics for single-player.
+        const snakes = isMultiplayer ? [] : [g.player, ...g.bots];
 
         snakes.forEach((snake) => {
           if (snake.dead) {
@@ -557,11 +559,12 @@ export default function App() {
           }
         }
 
+        // In multiplayer, send input only (server does physics)
         if (isMultiplayer && time - g.lastNetworkUpdate > 50) {
           g.lastNetworkUpdate = time;
-          socket.emit("player_update", {
-            snake: g.player,
-            playerName,
+          socket.emit("player_input", {
+            targetAngle: g.player.targetAngle,
+            isBoosting: g.player.isBoosting,
           });
         }
       }
@@ -646,20 +649,21 @@ export default function App() {
         ctx.globalAlpha = 1;
       }
 
-      // Snakes
-      // Snakes
-      const allSnakes = isMultiplayer ? [g.player] : [...g.bots, g.player];
+      // Snakes — in multiplayer, render all from server state
+      const allSnakes: any[] = isMultiplayer ? [] : [...g.bots, g.player];
 
       if (isMultiplayer) {
+        // In multiplayer, foods come from server — render them above
+        // (already handled — g.foods is synced from server)
+
         for (const socketId in g.networkPlayers) {
-          if (socketId !== socket.id) {
-            const networkData = g.networkPlayers[socketId];
-            if (networkData && networkData.snake) {
-              allSnakes.push({
-                ...networkData.snake,
-                playerName: networkData.playerName,
-              });
-            }
+          const networkData = g.networkPlayers[socketId];
+          if (networkData && networkData.snake && !networkData.snake.dead) {
+            allSnakes.push({
+              ...networkData.snake,
+              playerName: networkData.playerName,
+              _isLocalPlayer: socketId === socket.id,
+            });
           }
         }
       }
@@ -786,26 +790,58 @@ export default function App() {
   );
 
   useEffect(() => {
-    const handleRoomState = (state: Record<string, any>) => {
-      game.current.networkPlayers = state;
+    // Server-authoritative state: { players, foods }
+    const handleRoomState = (state: { players: Record<string, any>; foods: Food[] }) => {
+      game.current.networkPlayers = state.players || {};
+      // Sync foods from server in multiplayer
+      if (state.foods) {
+        game.current.foods = state.foods;
+      }
+      // Update local player reference from server state
+      if (state.players && state.players[socket.id]) {
+        const serverPlayer = state.players[socket.id].snake;
+        if (serverPlayer) {
+          game.current.player.head = serverPlayer.head;
+          game.current.player.angle = serverPlayer.angle;
+          game.current.player.history = serverPlayer.history;
+          game.current.player.length = serverPlayer.length;
+          game.current.player.speed = serverPlayer.speed;
+          game.current.player.dead = serverPlayer.dead;
+        }
+      }
     };
     const handleChatMessage = (msg: any) => {
-      setChatMessages((prev) => [...prev, msg].slice(-20));
+      setChatMessages((prev) => [...prev, msg].slice(-30));
+      // Auto-scroll chat
+      setTimeout(() => {
+        if (chatBoxRef.current) {
+          chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
+        }
+      }, 50);
     };
     const handlePlayerDeath = (data: any) => {
-      addKillFeed(data.message);
-      createParticles(data.x, data.y, data.color, data.particleCount);
+      addKillFeed(`${data.playerName} was terminated`);
+      // Multi-point shatter effect along the dead snake's body
+      const count = (data.segmentCount || 10) * 5;
+      triggerShatter(data.x, data.y, data.color, count, data.bodyPositions);
+    };
+    const handleYouDied = (data: { score: number; killedBy: string }) => {
+      setScore(data.score);
+      addKillFeed(`You were terminated by ${data.killedBy}`);
+      gameOver();
     };
 
     socket.on("room_state", handleRoomState);
     socket.on("chat_message", handleChatMessage);
     socket.on("player_death", handlePlayerDeath);
+    socket.on("you_died", handleYouDied);
     return () => {
       socket.off("room_state", handleRoomState);
       socket.off("chat_message", handleChatMessage);
       socket.off("player_death", handlePlayerDeath);
+      socket.off("you_died", handleYouDied);
     };
-  }, [addKillFeed, createParticles]);
+  }, [addKillFeed, triggerShatter, gameOver]);
 
   // --- Event Listeners ---
   useEffect(() => {
@@ -991,13 +1027,13 @@ export default function App() {
           {/* Chat Box */}
           {isMultiplayer && (
             <div className="absolute bottom-6 left-6 w-80 flex flex-col gap-2 pointer-events-auto z-10">
-              <div className="bg-black/40 border border-cyan-500/30 rounded-lg p-2 h-40 overflow-y-auto flex flex-col gap-1 text-xs">
+              <div ref={chatBoxRef} className="bg-black/40 border border-cyan-500/30 rounded-lg p-2 h-40 overflow-y-auto flex flex-col gap-1 text-xs">
                 {chatMessages.map((msg) => (
-                  <div key={msg.id} className="break-words">
-                    <span className="text-cyan-400 font-bold">
+                  <div key={msg.id} className={`break-words ${msg.isSystem ? 'italic' : ''}`}>
+                    <span className={`font-bold ${msg.isSystem ? 'text-amber-400' : 'text-cyan-400'}`}>
                       {msg.sender}:{" "}
                     </span>
-                    <span className="text-cyan-50">{msg.text}</span>
+                    <span className={msg.isSystem ? 'text-amber-300/80' : 'text-cyan-50'}>{msg.text}</span>
                   </div>
                 ))}
               </div>
@@ -1006,8 +1042,6 @@ export default function App() {
                   e.preventDefault();
                   if (chatInput.trim()) {
                     socket.emit("chat_message", {
-                      id: Date.now(),
-                      sender: playerName,
                       text: chatInput.trim(),
                     });
                     setChatInput("");
@@ -1222,8 +1256,10 @@ export default function App() {
           <button
             onClick={() => {
               if (isMultiplayer) {
-                // Instantly respawn in the same room!
-                initGame(difficulty);
+                // Ask server to respawn us
+                socket.emit("respawn", { theme: game.current.player.theme });
+                setGameState("PLAYING");
+                setScore(0);
               } else {
                 // Single player kicks back to menu
                 setGameState("MENU");
